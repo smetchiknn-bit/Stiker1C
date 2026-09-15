@@ -13,7 +13,6 @@ const base = (size?: number) => ({
   xmlns: "http://www.w3.org/2000/svg",
 });
 
-/* ---------- логотипы: сначала ищем PNG пользователя, иначе штатный SVG ---------- */
 function LogoImg({ png, svg, size, alt, radius = 9 }: { png: string; svg: string; size: number; alt: string; radius?: number }) {
   const baseurl = import.meta.env.BASE_URL ?? "/";
   const [src, setSrc] = useState(baseurl + png);
@@ -30,25 +29,22 @@ function LogoImg({ png, svg, size, alt, radius = 9 }: { png: string; svg: string
       onError={() => {
         if (!failed.current) {
           failed.current = true;
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[Стикер в 1С] не найден ${baseurl + png} — показан SVG-заменитель. ` +
-              `Проверьте, что файл закоммичен в папку public/ репозитория.`
-          );
+          console.warn(`[Стикер в 1С] не найден ${baseurl + png} — показан SVG-заменитель.`);
           setSrc(baseurl + svg);
         }
       }}
     />
   );
 }
+
 export const DonorLogo = ({ size = 40, radius = 9 }: { size?: number; radius?: number }) => (
   <LogoImg png="logo.png" svg="logo.svg" size={size} alt="Логотип файла-донора" radius={radius} />
 );
+
 export const OneCLogo = ({ size = 40, radius = 9 }: { size?: number; radius?: number }) => (
   <LogoImg png="logo2.png" svg="logo2.svg" size={size} alt="Логотип файла 1С" radius={radius} />
 );
 
-/* ---------- иконки ---------- */
 export const IconSheet = ({ size, className, strokeWidth = 1.8 }: P) => (
   <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
     <path d="M6 2.8h8.2L19 7.6V21.2H6z" />
