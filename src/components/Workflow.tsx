@@ -1,374 +1,408 @@
---- src/components/Icons.tsx (原始)
 import { useRef, useState } from "react";
+import type { Analysis } from "../lib/processor";
+import { money } from "../lib/processor";
+import {
+  IconCheck, IconUpload, IconWarn, IconX, IconArrow, IconLock, IconSheet,
+  IconShield, IconSigma, IconDownload, IconRefresh, DonorLogo,
+} from "./Icons";
 
-interface P {
-  size?: number;
-  className?: string;
-  strokeWidth?: number;
+export type Stage = "idle" | "loading" | "review" | "processing" | "done" | "error";
+
+export interface ErrorInfo {
+  title: string;
+  detail: string;
 }
-const base = (size?: number) => ({
-  width: size ?? 20,
-  height: size ?? 20,
-  viewBox: "0 0 24 24",
-  fill: "none",
-  xmlns: "http://www.w3.org/2000/svg",
-});
 
-/* ---------- логотипы: сначала ищем PNG пользователя, иначе штатный SVG ---------- */
-function LogoImg({ png, svg, size, alt }: { png: string; svg: string; size: number; alt: string }) {
-  const baseurl = import.meta.env.BASE_URL ?? "/";
-  const [src, setSrc] = useState(baseurl + png);
-  const failed = useRef(false);
+export function fmtSize(bytes: number): string {
+  if (bytes < 1024) return bytes + " Б";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1).replace(".", ",") + " КБ";
+  return (bytes / 1024 / 1024).toFixed(2).replace(".", ",") + " МБ";
+}
+
+export interface WizardStep {
+  id: string;
+  n: string;
+  title: string;
+  desc: string;
+  icon: (p: { size?: number; className?: string }) => React.ReactNode;
+  state: "done" | "current" | "locked";
+}
+
+export function WizardRail({ steps, onJump }: { steps: WizardStep[]; onJump: (id: string) => void }) {
   return (
-    <img
-      src={src}
-      alt={alt}
-      width={size}
-      height={size}
-      draggable={false}
-      className="shrink-0 select-none rounded-[9px]"
-      style={{ backgroundColor: "#fff" }}
-      onError={() => {
-        if (!failed.current) {
-          failed.current = true;
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[Стикер в 1С] не найден ${baseurl + png} — показан SVG-заменитель. ` +
-              `Проверьте, что файл закоммичен в папку public/ репозитория.`
-          );
-          setSrc(baseurl + svg);
-        }
-      }}
-    />
+    <ol className="relative">
+      <span aria-hidden className="absolute bottom-4 left-[19px] top-4 w-px bg-line" />
+      {steps.map((s, i) => {
+        const Icon = s.icon as any;
+        return (
+          <li key={s.id} className="relative flex gap-3.5 pb-6 last:pb-0">
+            <button
+              type="button"
+              onClick={() => s.state === "done" && onJump(s.id)}
+              disabled={s.state === "locked"}
+              title={s.state === "done" ? "Перейти к шагу" : undefined}
+              className={[
+                "relative z-10 grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 transition-all duration-200",
+                s.state === "done"
+                  ? "cursor-pointer border-green bg-green text-[#f2f9f5] hover:-translate-y-0.5"
+                  : s.state === "current"
+                    ? "border-green bg-white text-green shadow-[0_0_0_4px_rgba(30,113,69,0.14)]"
+                    : "border-line bg-white text-line",
+              ].join(" ")}
+            >
+              {s.state === "done" ? <IconCheck size={17} /> : s.state === "locked" ? <IconLock size={15} /> : <Icon size={17} />}
+            </button>
+            <span className="pt-0.5">
+              <span className="label-caps block !text-[10px]">шаг {s.n}</span>
+              <span
+                className={[
+                  "mt-0.5 block font-display text-[13.5px] font-semibold leading-tight tracking-tight transition-colors",
+                  s.state === "locked" ? "text-ink-soft/50" : "text-ink",
+                ].join(" ")}
+              >
+                {s.title}
+              </span>
+              <span className="mt-0.5 block text-[12px] leading-snug text-ink-soft">{s.desc}</span>
+            </span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
-export const DonorLogo = ({ size = 40 }: { size?: number }) => (
-  <LogoImg png="logo.png" svg="logo.svg" size={size} alt="Логотип файла-донора" />
-);
-export const OneCLogo = ({ size = 40 }: { size?: number }) => (
-  <LogoImg png="logo2.png" svg="logo2.svg" size={size} alt="Логотип файла 1С" />
-);
 
-/* ---------- иконки ---------- */
-export const IconSheet = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M6 2.8h8.2L19 7.6V21.2H6z" />
-    <path d="M14 3v5h5" />
-    <path d="M8.5 12h6M8.5 15.2h6M8.5 18.4h3.6" />
-  </svg>
-);
+export const WIZARD_ICONS = { IconSheet, IconShield, IconSigma, IconDownload };
 
-export const IconUpload = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 15V4.5" />
-    <path d="M7.5 8.5L12 4l4.5 4.5" />
-    <path d="M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3" />
-  </svg>
-);
-
-export const IconDownload = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 4v10.5" />
-    <path d="M7.5 10.5L12 15l4.5-4.5" />
-    <path d="M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3" />
-  </svg>
-);
-
-export const IconCheck = ({ size, className, strokeWidth = 2.4 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4.5 12.8l4.6 4.7L19.5 6.6" />
-  </svg>
-);
-
-export const IconWarn = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 3.6L21.4 20H2.6z" />
-    <path d="M12 9.8v4.4" />
-    <circle cx="12" cy="17.2" r="0.4" fill="currentColor" />
-  </svg>
-);
-
-export const IconX = ({ size, className, strokeWidth = 2 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round">
-    <path d="M6 6l12 12M18 6L6 18" />
-  </svg>
-);
-
-export const IconArrow = ({ size, className, strokeWidth = 2 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 12h15" />
-    <path d="M13.5 6l6 6-6 6" />
-  </svg>
-);
-
-export const IconShield = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 3l7.5 3v5.6c0 4.6-3.2 7.9-7.5 9.4-4.3-1.5-7.5-4.8-7.5-9.4V6z" />
-    <path d="M8.7 11.9l2.3 2.3 4.3-4.6" />
-  </svg>
-);
-
-export const IconSigma = ({ size, className, strokeWidth = 1.9 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M17.5 7.5v-2h-11l6 6.5-6 6.5h11v-2" />
-  </svg>
-);
-
-export const IconTree = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3.5" y="3.5" width="7" height="5" rx="1" />
-    <rect x="13.5" y="9.5" width="7" height="5" rx="1" />
-    <rect x="13.5" y="15.5" width="7" height="5" rx="1" />
-    <path d="M7 8.5v9.5h6.5M7 12h6.5" />
-  </svg>
-);
-
-export const IconPaint = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="4" y="4" width="16" height="7" rx="1.5" />
-    <path d="M12 11v3.5h5.5a1 1 0 0 1 1 1v1" />
-    <rect x="16" y="16.5" width="5" height="4" rx="1" transform="translate(-2.5 0)" />
-  </svg>
-);
-
-export const IconGroup = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 5h16M4 9h10M4 13h10M4 17h16" />
-    <path d="M19 8v6" />
-    <path d="M17.5 9.5L19 8l1.5 1.5M17.5 12.5L19 14l1.5-1.5" />
-  </svg>
-);
-
-export const IconRefresh = ({ size, className, strokeWidth = 1.9 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 9" />
-    <path d="M19.5 4.5V9H15" />
-    <path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 15" />
-    <path d="M4.5 19.5V15H9" />
-  </svg>
-);
-
-export const IconCopy = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="8.5" y="8.5" width="11" height="11" rx="2" />
-    <path d="M15.5 5.5v-.3A1.7 1.7 0 0 0 13.8 3.5H6.2a1.7 1.7 0 0 0-1.7 1.7v7.6a1.7 1.7 0 0 0 1.7 1.7h.3" />
-  </svg>
-);
-
-export const IconLock = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="5.5" y="10.5" width="13" height="9.5" rx="2" />
-    <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" />
-    <circle cx="12" cy="15.2" r="0.5" fill="currentColor" />
-  </svg>
-);
-
-export const IconExternal = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M10 5H6.5A1.5 1.5 0 0 0 5 6.5v11A1.5 1.5 0 0 0 6.5 19h11a1.5 1.5 0 0 0 1.5-1.5V14" />
-    <path d="M14 4.5h5.5V10" />
-    <path d="M19 5l-8 8" />
-  </svg>
-);
-
-export const IconGlobe = ({ size, className, strokeWidth = 1.7 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5s-1.3 6.2-3.9 8.5c-2.6-2.3-3.9-5.2-3.9-8.5s1.3-6.2 3.9-8.5z" />
-  </svg>
-);
-
-export const IconEye = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M2.8 12S6.2 5.8 12 5.8 21.2 12 21.2 12 17.8 18.2 12 18.2 2.8 12 2.8 12z" />
-    <circle cx="12" cy="12" r="2.8" />
-  </svg>
-);
-
-
-+++ src/components/Icons.tsx (修改后)
-import { useRef, useState } from "react";
-
-interface P {
-  size?: number;
-  className?: string;
-  strokeWidth?: number;
-}
-const base = (size?: number) => ({
-  width: size ?? 20,
-  height: size ?? 20,
-  viewBox: "0 0 24 24",
-  fill: "none",
-  xmlns: "http://www.w3.org/2000/svg",
-});
-
-/* ---------- логотипы: сначала ищем PNG пользователя, иначе штатный SVG ---------- */
-function LogoImg({ png, svg, size, alt, radius = 9 }: { png: string; svg: string; size: number; alt: string; radius?: number }) {
-  const baseurl = import.meta.env.BASE_URL ?? "/";
-  const [src, setSrc] = useState(baseurl + png);
-  const failed = useRef(false);
+function Dropzone({ onFile, onDemo, busy }: { onFile: (f: File) => void; onDemo: () => void; busy: boolean }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [drag, setDrag] = useState(false);
   return (
-    <img
-      src={src}
-      alt={alt}
-      width={size}
-      height={size}
-      draggable={false}
-      className="shrink-0 select-none"
-      style={{ backgroundColor: "#fff", borderRadius: radius }}
-      onError={() => {
-        if (!failed.current) {
-          failed.current = true;
-          // eslint-disable-next-line no-console
-          console.warn(
-            `[Стикер в 1С] не найден ${baseurl + png} — показан SVG-заменитель. ` +
-              `Проверьте, что файл закоммичен в папку public/ репозитория.`
-          );
-          setSrc(baseurl + svg);
-        }
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label="Загрузить файл-донор"
+      onClick={() => inputRef.current?.click()}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
       }}
-    />
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDrag(true);
+      }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDrag(false);
+        const f = e.dataTransfer.files?.[0];
+        if (f) onFile(f);
+      }}
+      className={["dropzone cursor-pointer px-6 py-9 text-center outline-none", drag ? "drag" : ""].join(" ")}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".xlsx,.xlsm"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) onFile(f);
+          e.target.value = "";
+        }}
+      />
+      <div className="pointer-events-none flex justify-center">
+        <div className="anim-floaty grid h-[212px] w-[196px] place-items-center rounded-[16px] border border-line bg-white shadow-[5px_6px_0_rgba(21,38,32,0.10)]">
+          <DonorLogo size={174} radius={12} />
+        </div>
+      </div>
+      <p className="mt-5 font-display text-[19px] font-semibold tracking-tight text-ink">
+        {drag ? "Отпускайте — прочитаем книгу" : "Перетащите файл-донор"}
+      </p>
+      <p className="mt-1.5 font-mono text-[12px] text-ink-soft">
+        .xlsx / .xlsm · лист «Свод» · обработка локально
+      </p>
+      <div className="mt-6 flex flex-wrap items-center justify-center gap-3" onClick={(e) => e.stopPropagation()}>
+        <button type="button" onClick={() => inputRef.current?.click()} className="btn btn-primary">
+          <IconUpload size={17} /> Выбрать файл
+        </button>
+        <button type="button" onClick={onDemo} disabled={busy} className="btn btn-ghost">
+          Демо-пример донора
+        </button>
+      </div>
+    </div>
   );
 }
-export const DonorLogo = ({ size = 40, radius = 9 }: { size?: number; radius?: number }) => (
-  <LogoImg png="logo.png" svg="logo.svg" size={size} alt="Логотип файла-донора" radius={radius} />
-);
-export const OneCLogo = ({ size = 40, radius = 9 }: { size?: number; radius?: number }) => (
-  <LogoImg png="logo2.png" svg="logo2.svg" size={size} alt="Логотип файла 1С" radius={radius} />
-);
 
-/* ---------- иконки ---------- */
-export const IconSheet = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M6 2.8h8.2L19 7.6V21.2H6z" />
-    <path d="M14 3v5h5" />
-    <path d="M8.5 12h6M8.5 15.2h6M8.5 18.4h3.6" />
-  </svg>
-);
+export function BookCard({
+  stage,
+  fileMeta,
+  analysis,
+  onFile,
+  onDemo,
+  busy,
+  onReplace,
+}: {
+  stage: Stage;
+  fileMeta: { name: string; size: number } | null;
+  analysis: Analysis | null;
+  onFile: (f: File) => void;
+  onDemo: () => void;
+  busy: boolean;
+  onReplace: () => void;
+}) {
+  return (
+    <section id="card-book" className="card card-hover rise scroll-mt-6 p-5">
+      <header className="mb-4 flex items-center gap-2.5">
+        <span className="label-caps">шаг 01 · книга</span>
+        <span className="ml-auto chip-mono">Excel → браузер</span>
+      </header>
 
-export const IconUpload = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 15V4.5" />
-    <path d="M7.5 8.5L12 4l4.5 4.5" />
-    <path d="M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3" />
-  </svg>
-);
+      {stage === "idle" && <Dropzone onFile={onFile} onDemo={onDemo} busy={busy} />}
 
-export const IconDownload = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 4v10.5" />
-    <path d="M7.5 10.5L12 15l4.5-4.5" />
-    <path d="M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3" />
-  </svg>
-);
+      {stage === "loading" && (
+        <div className="grid place-items-center rounded-[10px] border border-dashed border-line bg-green-mist px-6 py-10 text-center">
+          <span className="relative grid h-12 w-12 place-items-center">
+            <i className="absolute inset-0 rounded-full border-[3px] border-line" />
+            <i className="anim-spin absolute inset-0 rounded-full border-[3px] border-transparent border-t-green" />
+            <IconSheet size={18} className="text-green" />
+          </span>
+          <p className="mt-4 font-display text-[15px] font-semibold text-ink">Читаем книгу Excel…</p>
+          <p className="mt-1 font-mono text-[12px] text-ink-soft">ищем лист «Свод» и «Стикер» в J2</p>
+        </div>
+      )}
 
-export const IconCheck = ({ size, className, strokeWidth = 2.4 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4.5 12.8l4.6 4.7L19.5 6.6" />
-  </svg>
-);
+      {(stage === "review" || stage === "processing" || stage === "done" || stage === "error") && analysis && fileMeta && (
+        <div className="flex flex-wrap items-center gap-4 rounded-[10px] border border-line bg-green-mist px-4 py-3.5">
+          <DonorLogo size={46} />
+          <div className="min-w-0">
+            <p className="truncate font-mono text-[14px] font-semibold text-ink">{fileMeta.name}</p>
+            <p className="mt-0.5 font-mono text-[11.5px] text-ink-soft">
+              листов: {analysis.sheetNames.length} · строк данных: {analysis.dataRows} · {fmtSize(fileMeta.size)}
+            </p>
+          </div>
+          <span className="chip-mono">лист «Свод» ✓</span>
+          <button type="button" onClick={onReplace} disabled={stage === "processing"} className="btn btn-ghost btn-sm ml-auto">
+            <IconRefresh size={15} /> Заменить
+          </button>
+        </div>
+      )}
 
-export const IconWarn = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 3.6L21.4 20H2.6z" />
-    <path d="M12 9.8v4.4" />
-    <circle cx="12" cy="17.2" r="0.4" fill="currentColor" />
-  </svg>
-);
+      {stage === "error" && !analysis && (
+        <Dropzone onFile={onFile} onDemo={onDemo} busy={busy} />
+      )}
+    </section>
+  );
+}
 
-export const IconX = ({ size, className, strokeWidth = 2 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round">
-    <path d="M6 6l12 12M18 6L6 18" />
-  </svg>
-);
+export function ControlCard({
+  a,
+  stage,
+  outName,
+  onOutName,
+  grAnswer,
+  onGrYes,
+  onGrNo,
+  onStart,
+}: {
+  a: Analysis;
+  stage: Stage;
+  outName: string;
+  onOutName: (v: string) => void;
+  grAnswer: null | "yes";
+  onGrYes: () => void;
+  onGrNo: () => void;
+  onStart: () => void;
+}) {
+  const running = stage === "processing";
+  const done = stage === "done";
+  const nameOk = outName.trim().length > 0;
+  const grOk = a.hasGR || grAnswer === "yes";
+  const canStart = nameOk && grOk && !running && !done;
+  const reason = !nameOk
+    ? "Укажите имя готового файла."
+    : !grOk
+      ? "Ответьте на вопрос про «ГР» ниже."
+      : "";
 
-export const IconArrow = ({ size, className, strokeWidth = 2 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 12h15" />
-    <path d="M13.5 6l6 6-6 6" />
-  </svg>
-);
+  return (
+    <section id="card-control" className="card card-hover rise scroll-mt-6 p-5" style={{ ["--d" as any]: "0.05s" }}>
+      <header className="mb-4 flex flex-wrap items-center gap-2.5">
+        <span className="label-caps">шаг 02 · контроль</span>
+        <span className="chip-mono">авто-определение</span>
+        {done && <span className="chip-mono ml-auto">✓ выполнено</span>}
+      </header>
 
-export const IconShield = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 3l7.5 3v5.6c0 4.6-3.2 7.9-7.5 9.4-4.3-1.5-7.5-4.8-7.5-9.4V6z" />
-    <path d="M8.7 11.9l2.3 2.3 4.3-4.6" />
-  </svg>
-);
+      <h2 className="font-display text-[17px] font-semibold tracking-tight text-ink">
+        Параметры листа «Свод»
+      </h2>
+      <p className="mt-1 text-[13px] text-ink-soft">
+        Всё определено автоматически из донора — проверьте и, если нужно, поправьте имя файла.
+      </p>
 
-export const IconSigma = ({ size, className, strokeWidth = 1.9 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M17.5 7.5v-2h-11l6 6.5-6 6.5h11v-2" />
-  </svg>
-);
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <div className="rounded-[10px] border border-line bg-white p-3.5">
+          <p className="label-caps">Стикер · ячейка J2</p>
+          <p className="tnum mt-1.5 font-mono text-[22px] font-bold leading-none text-green-deep">
+            {a.stikerNum != null ? money(a.stikerNum) : String(a.stikerRaw)}
+            <span className="ml-1.5 text-[12px] font-medium text-ink-soft">руб.</span>
+          </p>
+          <p className="mt-1.5 font-mono text-[11px] text-ink-soft">
+            {a.stikerRaw == null || a.stikerRaw === "" ? "пустая ячейка → макрос примет за 0" : "определена автоматически"}
+          </p>
+        </div>
 
-export const IconTree = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3.5" y="3.5" width="7" height="5" rx="1" />
-    <rect x="13.5" y="9.5" width="7" height="5" rx="1" />
-    <rect x="13.5" y="15.5" width="7" height="5" rx="1" />
-    <path d="M7 8.5v9.5h6.5M7 12h6.5" />
-  </svg>
-);
+        <div className="rounded-[10px] border border-line bg-white p-3.5">
+          <p className="label-caps">Имя готового файла</p>
+          <input
+            className={["field mt-1.5", !nameOk ? "!border-red" : ""].join(" ")}
+            value={outName}
+            disabled={running || done}
+            onChange={(e) => onOutName(e.target.value)}
+            spellCheck={false}
+            aria-label="Имя готового файла"
+          />
+          <p className="mt-1.5 font-mono text-[11px] text-ink-soft">
+            определено: <b className="text-ink">{a.outName}</b> · можно исправить
+          </p>
+        </div>
 
-export const IconPaint = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="4" y="4" width="16" height="7" rx="1.5" />
-    <path d="M12 11v3.5h5.5a1 1 0 0 1 1 1v1" />
-    <rect x="16" y="16.5" width="5" height="4" rx="1" transform="translate(-2.5 0)" />
-  </svg>
-);
+        <div className="rounded-[10px] border border-line bg-white p-3.5 sm:col-span-2">
+          <p className="label-caps">Уровни иерархии · колонка K</p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {Object.entries(a.levelCounts).length === 0 && (
+              <span className="font-mono text-[12px] text-ink-soft">коды уровней не найдены</span>
+            )}
+            {Object.entries(a.levelCounts).map(([k, n]) => (
+              <span
+                key={k}
+                className={[
+                  "chip-mono",
+                  k === "ГР" ? "!border-[#c9a94e] !bg-[#fdf0c8] !text-[#6b4a00]" : "",
+                  k === "ТМЦ" ? "!border-[#9cbf8a] !bg-[#e2efd9] !text-[#3c5a2c]" : "",
+                  k === "КЕР" ? "!border-amber/40 !bg-amber-soft !text-amber" : "",
+                ].join(" ")}
+              >
+                {k} × {n}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
 
-export const IconGroup = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4 5h16M4 9h10M4 13h10M4 17h16" />
-    <path d="M19 8v6" />
-    <path d="M17.5 9.5L19 8l1.5 1.5M17.5 12.5L19 14l1.5-1.5" />
-  </svg>
-);
+      {!a.hasGR && grAnswer == null && (
+        <div className="rise mt-4 flex flex-wrap items-start gap-3 rounded-[10px] border border-amber/40 bg-amber-soft px-4 py-3.5">
+          <IconWarn size={22} className="mt-0.5 shrink-0 text-amber" />
+          <div className="min-w-[220px] flex-1">
+            <p className="text-[13.5px] font-semibold text-amber">
+              В колонке K (11) не найдено ни одной группы «ГР»
+            </p>
+            <p className="mt-0.5 text-[12.5px] text-ink-soft">
+              Макрос на этом месте спрашивает разрешение. Продолжить обработку?
+            </p>
+            <div className="mt-3 flex gap-2.5">
+              <button type="button" onClick={onGrYes} className="btn btn-primary btn-sm">
+                Да, продолжить
+              </button>
+              <button type="button" onClick={onGrNo} className="btn btn-ghost btn-sm">
+                <IconX size={13} /> Нет, отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {!a.hasGR && grAnswer === "yes" && (
+        <p className="mt-3 font-mono text-[12px] text-green">
+          ◆ ответ записан: продолжаем без «ГР»
+        </p>
+      )}
 
-export const IconRefresh = ({ size, className, strokeWidth = 1.9 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4.5 12a7.5 7.5 0 0 1 12.8-5.3L19.5 9" />
-    <path d="M19.5 4.5V9H15" />
-    <path d="M19.5 12a7.5 7.5 0 0 1-12.8 5.3L4.5 15" />
-    <path d="M4.5 19.5V15H9" />
-  </svg>
-);
+      {!done && (
+        <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-dashed border-line pt-4">
+          {running ? (
+            <span className="inline-flex items-center gap-2.5 font-mono text-[13px] text-green">
+              <i className="anim-spin inline-block h-4 w-4 rounded-full border-2 border-green-soft border-t-green" />
+              выполняется обработка…
+            </span>
+          ) : (
+            <>
+              <button type="button" onClick={onStart} disabled={!canStart} className="btn btn-primary">
+                Начать обработку <IconArrow size={16} />
+              </button>
+              {reason && <span className="font-mono text-[12px] text-amber">◆ {reason}</span>}
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
-export const IconCopy = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="8.5" y="8.5" width="11" height="11" rx="2" />
-    <path d="M15.5 5.5v-.3A1.7 1.7 0 0 0 13.8 3.5H6.2a1.7 1.7 0 0 0-1.7 1.7v7.6a1.7 1.7 0 0 0 1.7 1.7h.3" />
-  </svg>
-);
+export function JournalCard({
+  lines,
+  visible,
+  running,
+}: {
+  lines: string[];
+  visible: number;
+  running: boolean;
+}) {
+  const shown = lines.slice(0, visible);
+  return (
+    <section id="card-journal" className="rise scroll-mt-6" style={{ ["--d" as any]: "0.1s" }}>
+      <div className="journal">
+        {running && <div className="film" aria-hidden />}
+        <header className="flex items-center gap-2.5 px-4 pb-2 pt-3.5">
+          <span className="label-caps !text-[#9fcdb2]">шаг 03 · журнал обработки</span>
+          <span
+            className={[
+              "ml-auto inline-flex items-center gap-1.5 font-mono text-[11.5px]",
+              running ? "text-[#ffd965]" : "text-[#9fcdb2]",
+            ].join(" ")}
+          >
+            <i className="h-1.5 w-1.5 rounded-full bg-current" style={{ animation: "blink 1.4s infinite" }} />
+            {running ? "выполняется" : "завершено"}
+          </span>
+        </header>
+        <ul className="pb-2">
+          {shown.map((l, i) => (
+            <li key={l + i} className="log-line" style={{ animationDelay: `${i * 90}ms` }}>
+              <span className="mr-2 text-[#7fc79a]">▸</span>
+              {l}
+            </li>
+          ))}
+          {running && (
+            <li className="log-line text-[#9fcdb2]">
+              <span className="mr-2 text-[#7fc79a]">▸</span>
+              выполняется операция
+              <i className="ml-1 inline-block h-[13px] w-[7px] translate-y-[2px] bg-[#9fcdb2]" style={{ animation: "blink 0.8s infinite" }} />
+            </li>
+          )}
+        </ul>
+      </div>
+    </section>
+  );
+}
 
-export const IconLock = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <rect x="5.5" y="10.5" width="13" height="9.5" rx="2" />
-    <path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" />
-    <circle cx="12" cy="15.2" r="0.5" fill="currentColor" />
-  </svg>
-);
-
-export const IconExternal = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M10 5H6.5A1.5 1.5 0 0 0 5 6.5v11A1.5 1.5 0 0 0 6.5 19h11a1.5 1.5 0 0 0 1.5-1.5V14" />
-    <path d="M14 4.5h5.5V10" />
-    <path d="M19 5l-8 8" />
-  </svg>
-);
-
-export const IconGlobe = ({ size, className, strokeWidth = 1.7 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M3.5 12h17M12 3.5c2.6 2.3 3.9 5.2 3.9 8.5s-1.3 6.2-3.9 8.5c-2.6-2.3-3.9-5.2-3.9-8.5s1.3-6.2 3.9-8.5z" />
-  </svg>
-);
-
-export const IconEye = ({ size, className, strokeWidth = 1.8 }: P) => (
-  <svg {...base(size)} className={className} stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
-    <path d="M2.8 12S6.2 5.8 12 5.8 21.2 12 21.2 12 17.8 18.2 12 18.2 2.8 12 2.8 12z" />
-    <circle cx="12" cy="12" r="2.8" />
-  </svg>
-);
+export function ErrorPanel({ error, onRetry }: { error: ErrorInfo; onRetry: () => void }) {
+  return (
+    <section className="card rise !border-red/40 p-5">
+      <div className="flex items-start gap-3.5">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-red-soft text-red">
+          <IconX size={20} />
+        </span>
+        <div className="min-w-0">
+          <p className="font-display text-[16px] font-semibold tracking-tight text-red">{error.title}</p>
+          <p className="mt-1.5 whitespace-pre-wrap font-mono text-[12.5px] leading-relaxed text-ink-soft">
+            {error.detail}
+          </p>
+        </div>
+      </div>
+      <div className="mt-4 flex gap-2.5 border-t border-dashed border-line pt-4">
+        <button type="button" onClick={onRetry} className="btn btn-primary btn-sm">
+          <IconRefresh size={15} /> Повторить
+        </button>
+        <span className="self-center font-mono text-[11.5px] text-ink-soft">
+          ◆ источник будет перечитан заново
+        </span>
+      </div>
+    </section>
+  );
+}
