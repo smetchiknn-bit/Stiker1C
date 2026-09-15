@@ -25,7 +25,7 @@ function LogoImg({ png, svg, size, alt, radius = 9 }: { png: string; svg: string
       height={size}
       draggable={false}
       className="shrink-0 select-none"
-      style={{ backgroundColor: "#fff", borderRadius: radius }}
+      style={{ borderRadius: radius }}
       onError={() => {
         if (!failed.current) {
           failed.current = true;
