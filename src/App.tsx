@@ -13,6 +13,7 @@ import {
   FileCard, PreviewSidebar, FormulaCards, PaletteSection, RequirementsSection,
 } from "./components/Results";
 import { DonorLogo, OneCLogo, IconGlobe } from "./components/Icons";
+import { VersionButton } from "./components/VersionButton";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
@@ -403,6 +404,11 @@ function AppInner() {
           </div>
         </div>
       </main>
+
+      {/* ======= кнопка версии ======= */}
+      <div className="relative z-10 flex justify-center pb-8">
+        <VersionButton />
+      </div>
 
       {/* ======= подвал ======= */}
       <footer className="relative z-10 border-t border-line bg-paper/80 py-6">
