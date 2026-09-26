@@ -28,8 +28,9 @@ export const FILL_L3_HEX = "E2EFDA";
 export const BORDER_GRAY = { theme: 1, tint: -0.349986266670736 };
 
 /* исходные колонки, удаляемые в конце Нумерация_1С:
-   трижды Columns(8).Delete → H,I,J; затем 6 раз Columns(10).Delete → M,N,O,P,Q,R */
-const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18]);
+   трижды Columns(8).Delete → H,I,J; затем 6 раз Columns(10).Delete → M,N,O,P,Q,R
+   Новая колонка "ИД.Бюджетная.Статья.1С" (если есть) находится в колонке S (19) и тоже удаляется */
+const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18, 19]);
 
 /* ---------- типы ---------- */
 interface CellData {
@@ -62,6 +63,7 @@ export interface Analysis {
   stikerNum: number | null;
   hasGR: boolean;
   levelCounts: Record<string, number>;
+  hasBudgetColumn: boolean; // наличие колонки "ИД.Бюджетная.Статья.1С"
 }
 
 export interface PreviewCell {
@@ -229,6 +231,9 @@ export function analyzeDonor(wb: ExcelJS.Workbook, fileName: string): Analysis {
     }
   }
 
+  // Проверка наличия новой колонки "ИД.Бюджетная.Статья.1С" (колонка S, номер 19)
+  const hasBudgetColumn = checkBudgetColumn(ws);
+
   return {
     fileName,
     baseName: baseNameOf(fileName),
@@ -240,6 +245,7 @@ export function analyzeDonor(wb: ExcelJS.Workbook, fileName: string): Analysis {
     stikerNum: stikerRaw == null || stikerRaw === "" ? 0 : toNumericOrNull(stikerRaw),
     hasGR,
     levelCounts,
+    hasBudgetColumn,
   };
 }
 
@@ -250,6 +256,17 @@ function lastNonEmptyRowOf(ws: ExcelJS.Worksheet, col: number): number {
     if (!isEmptyV(effectiveValue(ws.getCell(r, col).value))) last = r;
   }
   return last;
+}
+
+/* Проверка наличия колонки "ИД.Бюджетная.Статья.1С" в колонке S (19) */
+function checkBudgetColumn(ws: ExcelJS.Worksheet): boolean {
+  // Проверяем заголовок в строке 1, колонка S (19)
+  const header = effectiveValue(ws.getCell(1, 19).value);
+  if (typeof header === "string") {
+    const h = header.trim().toLowerCase();
+    return h.includes("ид") && h.includes("бюджетн") && h.includes("статья");
+  }
+  return false;
 }
 
 /* ---------- доступ к сетке ---------- */
@@ -443,7 +460,7 @@ function runFormulas(grid: Row[], nElement: number) {
 }
 
 /* ---------- 5. Формат_1С ---------- */
-function runFormat(grid: Row[], nElemets: number) {
+function runFormat(grid: Row[], nElemets: number, hasBudgetColumn: boolean) {
   for (let r = 1; r <= nElemets; r++) {
     while (grid.length < r) grid.push(new Map());
     const row = grid[r - 1];
@@ -451,7 +468,9 @@ function runFormat(grid: Row[], nElemets: number) {
     g7.fill = FILL_RED;
     g7.fillT = undefined;
     if (!g7.numFmt) g7.numFmt = "@"; // Columns(7).NumberFormat = "@"
-    for (const c of [8, 9]) {
+    // Колонки 8-9 (и 10 если есть новая колонка) — зелёная заливка и серая граница
+    const greenCols = hasBudgetColumn ? [8, 9, 10] : [8, 9];
+    for (const c of greenCols) {
       const cd = row.get(c) ?? row.set(c, { v: null }).get(c)!;
       cd.fill = FILL_GREEN;
       cd.fillT = undefined;
@@ -546,9 +565,9 @@ function buildWorkbook(
   });
 
   /* Ширины колонок файла 1С (условные единицы Excel), по спецификации.
-     1=ИД 1С, 2=Структура/Статья (широкая), 3–9 — узкие; 10–12 не заданы → как у донора/по умолчанию. */
+     1=ИД 1С, 2=Структура/Статья (широкая), 3–10 — узкие; 11–12 не заданы → как у донора/по умолчанию. */
   const COL_WIDTHS: [number, number][] = [
-    [1, 11], [2, 50], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11],
+    [1, 11], [2, 50], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11], [10, 11],
   ];
   for (const [c, w] of COL_WIDTHS) ws.getColumn(c).width = w;
 
@@ -587,7 +606,7 @@ function buildPreview(grid: Row[], levels: number[], upto: number): PreviewRow[]
   for (let r = 1; r <= maxR; r++) {
     const row = grid[r - 1];
     const cells: PreviewCell[] = [];
-    for (let c = 1; c <= 12; c++) {
+    for (let c = 1; c <= 13; c++) {
       const cd = row.get(c);
       if (!cd) {
         cells.push({ v: "" });
@@ -673,6 +692,11 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   if (grid.length === 0) grid.push(new Map());
   headers.forEach((h, i) => setV(grid[0], i + 1, h));
 
+  // Если есть новая колонка "ИД.Бюджетная.Статья.1С", добавляем её заголовок
+  if (a.hasBudgetColumn) {
+    setV(grid[0], 10, "ИД.Бюджетная.Статья.1С");
+  }
+
   // Нумерация_1С (возвращает число вставленных строк и границу nElemets)
   const lastRowA0 = lastNonEmpty(grid, 1);
   let y = 0;
@@ -685,7 +709,7 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
 
   const nElement = lastNonEmpty(grid, 1);
   const sums = runFormulas(grid, nElement);
-  runFormat(grid, nElemets);
+  runFormat(grid, nElemets, a.hasBudgetColumn);
   const grp = runGrouping(grid, nElement);
 
   // фильтруем объединения по удалённым колонкам
@@ -707,7 +731,7 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
     diff,
     match,
     rows: safePreview(grid, grp.levels, Math.min(sums.totalRow, 90)),
-    cols: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    cols: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
     stats: {
       totalRows: nElement,
       insertedRows: y,
