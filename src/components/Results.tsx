@@ -14,7 +14,7 @@ const SUBJECT_MAP: Record<string, string> = {
 };
 const mapFill = (f?: string) => (f ? SUBJECT_MAP[f] ?? f : undefined);
 
-const COLS = "ABCDEFGHIJKL".split("");
+const COLS = "ABCDEFGHIJKLM".split("");
 
 /* ================= шаг 4 · файл 1С: суммы и скачивание ================= */
 export function FileCard({
