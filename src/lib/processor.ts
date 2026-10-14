@@ -578,7 +578,7 @@ function buildWorkbook(
     if (!w) return;
     const col = ws.getColumn(i + 1);
     if (typeof w.w === "number") col.width = w.w;
-    if (w.hidden) col.hidden = true;
+    // Не переносим флаг hidden из донора — все колонки видимы
   });
 
   /* Ширины колонок файла 1С (условные единицы Excel), по спецификации.
@@ -588,9 +588,10 @@ function buildWorkbook(
   ];
   for (const [c, w] of COL_WIDTHS) ws.getColumn(c).width = w;
 
-  // Снимаем скрытие для колонок ТА (8) и ИД.Бюджетная.Статья.1С (10) в выходном файле
-  ws.getColumn(8).hidden = false;
-  ws.getColumn(10).hidden = false;
+  // Явно снимаем скрытие для всех колонок (как команда "Показать")
+  for (let c = 1; c <= 12; c++) {
+    ws.getColumn(c).hidden = false;
+  }
 
   grid.forEach((row, gi) => {
     const r = gi + 1;
