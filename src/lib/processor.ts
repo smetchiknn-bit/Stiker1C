@@ -29,8 +29,11 @@ export const BORDER_GRAY = { theme: 1, tint: -0.349986266670736 };
 
 /* исходные колонки, удаляемые в конце Нумерация_1С:
    трижды Columns(8).Delete → H,I,J; затем 6 раз Columns(10).Delete → M,N,O,P,Q,R
-   Колонка S (19) "ИД.Бюджетная.Статья.1С" НЕ удаляется, остаётся видимой */
-const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18]);
+   Новая колонка "ИД.Бюджетная.Статья.1С" (если есть) находится в колонке S (19) и тоже удаляется */
+const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18, 19]);
+
+/* Колонка-источник "ИД.Бюджетная.Статья.1С" в исходной сетке (S / 19). */
+const BUDGET_SRC_COL = 19;
 
 /* ---------- типы ---------- */
 interface CellData {
@@ -322,12 +325,16 @@ const HIERARCHY: { code: string; resets: string[] }[] = [
   { code: "ГР", resets: ["КЕР", "ТМЦ"] },
 ];
 
-function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean): { inserted: number; nElemets: number } {
+function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElemets: number } {
   const cnt: Record<string, number> = {
     О: 0, К: 0, С: 0, У: 0, Э: 0, Л1: 0, Л2: 0, Л3: 0, Л4: 0, ГР: 0, КЕР: 0, ТМЦ: 0,
   };
   const r: string[] = new Array(12).fill("");
   let inserted = 0;
+
+  /* Последнее значение [ИД.Бюджетная.Статья.1С] со строки КЕР.
+     Дублируется на все последующие строки ТМЦ до следующего КЕР. */
+  let lastBudget: Raw = null;
 
   const lastRowA0 = lastNonEmpty(grid, 1);
   let y = 0;
@@ -360,6 +367,12 @@ function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean):
       if (codeS === "ГР") fillRowTheme(row, FILL_GR);
     } else if (codeS === "КЕР") {
       cnt["ТМЦ"] = 0;
+
+      /* 1) Запоминаем бюджетную статью с исходной строки КЕР
+         (до разбиения её на верхнюю gold- и нижнюю yellow-строки). */
+      const budgetFromKer = cell(row, BUDGET_SRC_COL)?.v;
+      if (!isEmptyV(budgetFromKer)) lastBudget = budgetFromKer;
+
       // Rows(i+1).Insert — новая строка выше исходной строки КЕР
       grid.splice(g, 0, new Map());
       inserts.push(g + 1); // номер новой строки в терминах Excel
@@ -378,6 +391,11 @@ function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean):
       setV(src, 1, r.slice(0, 11).join("") + cnt["ТМЦ"]);
       setV(src, 6, ""); // Cells(i+1, 6) = ""
       fillRow(src, FILL_YELLOW);
+
+      /* 2) Дублируем бюджетную статью на нижнюю (ТМЦ) строку КЕР. */
+      if (!isEmptyV(lastBudget)) {
+        setV(src, BUDGET_SRC_COL, lastBudget);
+      }
     } else if (codeS === "ТМЦ") {
       cnt["ТМЦ"] += 1;
       setV(row, 1, r.slice(0, 11).join("") + cnt["ТМЦ"]);
@@ -385,21 +403,9 @@ function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean):
       setV(row, 5, ""); // E = ""
       fillRow(row, FILL_YELLOW);
 
-      // Дублирование значения из вышестоящей строки КЕР для колонки "ИД.Бюджетная.Статья.1С"
-      if (hasBudgetColumn) {
-        // Найти предыдущую строку КЕР
-        for (let j = g - 1; j >= 1; j--) {
-          const prevRow = grid[j - 1];
-          const prevCode = cell(prevRow, 11)?.v;
-          if (prevCode === "КЕР") {
-            // Скопировать значение из колонки 19 (исходная колонка S)
-            const budgetValue = cell(prevRow, 19)?.v;
-            if (budgetValue != null && budgetValue !== "") {
-              setV(row, 19, budgetValue);
-            }
-            break;
-          }
-        }
+      /* 3) Протягиваем бюджетную статью с последнего КЕР на строку ТМЦ. */
+      if (!isEmptyV(lastBudget)) {
+        setV(row, BUDGET_SRC_COL, lastBudget);
       }
     }
   }
@@ -578,20 +584,17 @@ function buildWorkbook(
     if (!w) return;
     const col = ws.getColumn(i + 1);
     if (typeof w.w === "number") col.width = w.w;
-    // Не переносим флаг hidden из донора — все колонки видимы
+    /* Скрытие колонок из донора НЕ переносим:
+       в реципиенте колонки [ТА] и [ИД.Бюджетная.Статья.1С]
+       должны быть видимыми (как после команды «Показать»). */
   });
 
   /* Ширины колонок файла 1С (условные единицы Excel), по спецификации.
      1=ИД 1С, 2=Структура/Статья (широкая), 3–10 — узкие; 11–12 не заданы → как у донора/по умолчанию. */
   const COL_WIDTHS: [number, number][] = [
-    [1, 11], [2, 50], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11], [10, 20],
+    [1, 11], [2, 50], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11], [10, 11],
   ];
   for (const [c, w] of COL_WIDTHS) ws.getColumn(c).width = w;
-
-  // Явно снимаем скрытие для всех колонок (как команда "Показать")
-  for (let c = 1; c <= 12; c++) {
-    ws.getColumn(c).hidden = false;
-  }
 
   grid.forEach((row, gi) => {
     const r = gi + 1;
@@ -715,9 +718,8 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   headers.forEach((h, i) => setV(grid[0], i + 1, h));
 
   // Если есть новая колонка "ИД.Бюджетная.Статья.1С", добавляем её заголовок
-  // Устанавливаем в колонку 19 (S), которая после удаления станет колонкой 10
   if (a.hasBudgetColumn) {
-    setV(grid[0], 19, "ИД.Бюджетная.Статья.1С");
+    setV(grid[0], 10, "ИД.Бюджетная.Статья.1С");
   }
 
   // Нумерация_1С (возвращает число вставленных строк и границу nElemets)
@@ -725,7 +727,7 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   let y = 0;
   for (let rr = 2; rr <= lastRowA0; rr++) if (val(grid, rr, 11) === "КЕР") y++;
   const inserts: number[] = [];
-  const numInfo = runNumbering(grid, inserts, a.hasBudgetColumn);
+  const numInfo = runNumbering(grid, inserts);
   const nElemets = numInfo.nElemets; // = lastRowA0 + y + 1, как в макросе
 
   deleteColumns(grid, widths, merges, inserts);
