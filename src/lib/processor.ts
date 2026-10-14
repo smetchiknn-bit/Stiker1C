@@ -12,6 +12,13 @@ import { getExcelJS } from "./excel";
  *    5) Формат_1С — заливки, границы, числовые форматы;
  *    6) группировка_1С — уровни структуры по числу точек в «ИД 1С»;
  *    7) новый файл: лист «Свод», контрольные суммы (Стикер против итога 1С).
+ *
+ *  ДОП. (по требованию заказчика):
+ *    A) Колонки [ТА] и [ИД.Бюджетная.Статья.1С] в реципиенте должны быть
+ *       ВИДИМЫМИ (отменяем скрытие, которое было в доноре).
+ *    B) Значения [ИД.Бюджетная.Статья.1С] со строк КЕР дублируются вниз
+ *       на строки ТМЦ до следующего КЕР (аналог Power Query «Дублировать вниз»),
+ *       а ячейки, не относящиеся ни к КЕР, ни к ТМЦ — очищаются.
  * ==========================================================================*/
 
 export type Raw = string | number | boolean | Date | null;
@@ -34,6 +41,8 @@ const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18, 19]);
 
 /* Колонка-источник "ИД.Бюджетная.Статья.1С" в исходной сетке (S / 19). */
 const BUDGET_SRC_COL = 19;
+/* Колонка-источник кода уровня в исходной сетке (K / 11). */
+const CODE_SRC_COL = 11;
 
 /* ---------- типы ---------- */
 interface CellData {
@@ -332,14 +341,10 @@ function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElem
   const r: string[] = new Array(12).fill("");
   let inserted = 0;
 
-  /* Последнее значение [ИД.Бюджетная.Статья.1С] со строки КЕР.
-     Дублируется на все последующие строки ТМЦ до следующего КЕР. */
-  let lastBudget: Raw = null;
-
   const lastRowA0 = lastNonEmpty(grid, 1);
   let y = 0;
   for (let rr = 2; rr <= lastRowA0; rr++) {
-    if (val(grid, rr, 11) === "КЕР") y++;
+    if (val(grid, rr, CODE_SRC_COL) === "КЕР") y++;
   }
   const nElemets = lastRowA0 + y + 1; // как в макросе: nElemets = nElemets + y + 1
 
@@ -351,7 +356,7 @@ function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElem
     // Cells(i+1, 7) = Cells(i+1, 1) — исходный код уходит в колонку G
     setV(row, 7, cell(row, 1)?.v ?? null);
 
-    const code = cell(row, 11)?.v;
+    const code = cell(row, CODE_SRC_COL)?.v;
     const codeS = typeof code === "string" ? code : null;
     if (!codeS) continue;
 
@@ -367,12 +372,6 @@ function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElem
       if (codeS === "ГР") fillRowTheme(row, FILL_GR);
     } else if (codeS === "КЕР") {
       cnt["ТМЦ"] = 0;
-
-      /* 1) Запоминаем бюджетную статью с исходной строки КЕР
-         (до разбиения её на верхнюю gold- и нижнюю yellow-строки). */
-      const budgetFromKer = cell(row, BUDGET_SRC_COL)?.v;
-      if (!isEmptyV(budgetFromKer)) lastBudget = budgetFromKer;
-
       // Rows(i+1).Insert — новая строка выше исходной строки КЕР
       grid.splice(g, 0, new Map());
       inserts.push(g + 1); // номер новой строки в терминах Excel
@@ -391,22 +390,12 @@ function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElem
       setV(src, 1, r.slice(0, 11).join("") + cnt["ТМЦ"]);
       setV(src, 6, ""); // Cells(i+1, 6) = ""
       fillRow(src, FILL_YELLOW);
-
-      /* 2) Дублируем бюджетную статью на нижнюю (ТМЦ) строку КЕР. */
-      if (!isEmptyV(lastBudget)) {
-        setV(src, BUDGET_SRC_COL, lastBudget);
-      }
     } else if (codeS === "ТМЦ") {
       cnt["ТМЦ"] += 1;
       setV(row, 1, r.slice(0, 11).join("") + cnt["ТМЦ"]);
       setV(row, 4, cell(row, 5)?.v ?? ""); // D = E
       setV(row, 5, ""); // E = ""
       fillRow(row, FILL_YELLOW);
-
-      /* 3) Протягиваем бюджетную статью с последнего КЕР на строку ТМЦ. */
-      if (!isEmptyV(lastBudget)) {
-        setV(row, BUDGET_SRC_COL, lastBudget);
-      }
     }
   }
   return { inserted, nElemets } as any;
@@ -441,6 +430,48 @@ function deleteColumns(grid: Row[], widths: any[], merges: MergeRect[], inserts:
     for (const ins of inserts) {
       if (m.r1 >= ins) m.r1++;
       if (m.r2 >= ins) m.r2++;
+    }
+  }
+}
+
+/* ---------- 3a. Дублирование [ИД.Бюджетная.Статья.1С] (КЕР → ТМЦ) ---------- */
+/* Номера колонок ПОСЛЕ удаления служебных колонок. */
+const CODE_COL_AFTER = mapCol(CODE_SRC_COL);       // K (11)  → 8
+const BUDGET_COL_AFTER = mapCol(BUDGET_SRC_COL);   // S (19)  → 10
+
+/**
+ * Протягиваем [ИД.Бюджетная.Статья.1С] вниз по строкам:
+ *  - на строке «КЕР» запоминаем актуальное значение;
+ *  - на строках «КЕР» и «ТМЦ» проставляем это значение;
+ *  - на всех прочих строках (О, К, С, У, Э, Л1..Л4, ГР, заголовок, итоги) — очищаем.
+ * Полный аналог Power Query: «Дублировать вниз» + «Очистить лишние ячейки».
+ */
+function propagateBudget(grid: Row[], upToRow: number) {
+  let lastBudget: Raw = null;
+  for (let r = 2; r <= upToRow; r++) {   // строку 1 (заголовок) не трогаем
+    const row = grid[r - 1];
+    if (!row) continue;
+
+    const code = row.get(CODE_COL_AFTER)?.v;
+    const codeS = typeof code === "string" ? code : null;
+
+    if (codeS === "КЕР") {
+      const cur = row.get(BUDGET_COL_AFTER)?.v;
+      if (!isEmptyV(cur)) lastBudget = cur;
+    }
+
+    if (codeS === "КЕР" || codeS === "ТМЦ") {
+      if (!isEmptyV(lastBudget)) {
+        setV(row, BUDGET_COL_AFTER, lastBudget);
+      } else {
+        // Источника нет — на всякий случай очищаем.
+        setV(row, BUDGET_COL_AFTER, null);
+      }
+    } else {
+      // Не КЕР и не ТМЦ — очищаем.
+      if (row.has(BUDGET_COL_AFTER)) {
+        setV(row, BUDGET_COL_AFTER, null);
+      }
     }
   }
 }
@@ -523,7 +554,7 @@ function runGrouping(grid: Row[], nElement: number) {
         const y0 = i;
         i++;
         while (i <= lastRow) {
-          const isGR = val(grid, i, 11) === "ГР";
+          const isGR = val(grid, i, CODE_COL_AFTER) === "ГР";
           if (dots[i] > level - 1 || isGR) i++;
           else break;
         }
@@ -725,7 +756,7 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   // Нумерация_1С (возвращает число вставленных строк и границу nElemets)
   const lastRowA0 = lastNonEmpty(grid, 1);
   let y = 0;
-  for (let rr = 2; rr <= lastRowA0; rr++) if (val(grid, rr, 11) === "КЕР") y++;
+  for (let rr = 2; rr <= lastRowA0; rr++) if (val(grid, rr, CODE_SRC_COL) === "КЕР") y++;
   const inserts: number[] = [];
   const numInfo = runNumbering(grid, inserts);
   const nElemets = numInfo.nElemets; // = lastRowA0 + y + 1, как в макросе
@@ -733,6 +764,14 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   deleteColumns(grid, widths, merges, inserts);
 
   const nElement = lastNonEmpty(grid, 1);
+
+  /* Дублируем [ИД.Бюджетная.Статья.1С] с КЕР на ТМЦ и чистим лишние ячейки
+     (Power Query: «Дублировать вниз» + «Очистить»). Делаем это ПОСЛЕ удаления
+     служебных колонок, когда бюджетная колонка уже стоит в позиции 10. */
+  if (a.hasBudgetColumn) {
+    propagateBudget(grid, nElemets);
+  }
+
   const sums = runFormulas(grid, nElement);
   runFormat(grid, nElemets, a.hasBudgetColumn);
   const grp = runGrouping(grid, nElement);
