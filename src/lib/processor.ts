@@ -3,35 +3,46 @@ import { getExcelJS } from "./excel";
 
 /* ============================================================================
  *  СВОД → 1С: точный перенос VBA-макроса «Стикер_1С» в браузер.
+ *  Последовательность (как в макросе):
+ *    1) анализ донора: лист «Свод», значение «Стикер» (J2), наличие «ГР» в колонке K;
+ *    2) Нумерация_1С — иерархическая нумерация по уровням О,К,С,У,Э,Л1..Л4,ГР,
+ *       разбиение строк «КЕР» на две, перенос значений;
+ *    3) удаление служебных колонок (исходные H,I,J,M,N,O,P,Q,R);
+ *    4) Сквозные_формулы_1С — ROUND(кол-во × цена) и итоги SUMPRODUCT/SUM;
+ *    5) Формат_1С — заливки, границы, числовые форматы;
+ *    6) группировка_1С — уровни структуры по числу точек в «ИД 1С»;
+ *    7) новый файл: лист «Свод», контрольные суммы (Стикер против итога 1С).
  * ==========================================================================*/
 
 export type Raw = string | number | boolean | Date | null;
 
 /* ---------- цветовые константы макроса ---------- */
-export const FILL_RED = "FF0000";
-export const FILL_GREEN = "92D050";
-export const FILL_GOLD = "FFC000";
-export const FILL_YELLOW = "FFFF00";
-export const FILL_GR = { theme: 4, tint: 0.599993896298105 };
-export const FILL_L3 = { theme: 9, tint: 0.799981688894314 };
-export const FILL_GR_HEX = "DEEBF7";
+export const FILL_RED = "FF0000"; // Interior.Color = 255 (колонка G)
+export const FILL_GREEN = "92D050"; // Interior.Color = 5296274 (колонки 8-9)
+export const FILL_GOLD = "FFC000"; // 49407 — верхняя строка КЕР
+export const FILL_YELLOW = "FFFF00"; // 65535 — строка ТМЦ и нижняя строка КЕР
+export const FILL_GR = { theme: 4, tint: 0.599993896298105 }; // Accent1 Lighter 60%
+export const FILL_L3 = { theme: 9, tint: 0.799981688894314 }; // Accent6 Lighter 80%
+export const FILL_GR_HEX = "DEEBF7"; // для превью (тема Office по умолчанию)
 export const FILL_L3_HEX = "E2EFDA";
 export const BORDER_GRAY = { theme: 1, tint: -0.349986266670736 };
 
-/* исходные колонки, удаляемые в конце Нумерация_1С */
+/* исходные колонки, удаляемые в конце Нумерация_1С:
+   трижды Columns(8).Delete → H,I,J; затем 6 раз Columns(10).Delete → M,N,O,P,Q,R
+   Колонка S (19) "ИД.Бюджетная.Статья.1С" НЕ удаляется, остаётся видимой */
 const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18]);
 
 /* ---------- типы ---------- */
 interface CellData {
   v: Raw;
   style?: any;
-  fill?: string;
-  fillT?: { theme: number; tint: number };
-  gBorder?: boolean;
+  fill?: string; // макрос-заливка (hex)
+  fillT?: { theme: number; tint: number }; // макрос-заливка (тема)
+  gBorder?: boolean; // серая тонкая граница (колонки 8-9)
   numFmt?: string;
   hAlign?: "left";
-  f?: string;
-  fr?: number;
+  f?: string; // формула (A1-стиль, без "=")
+  fr?: number; // закэшированный результат формулы
 }
 type Row = Map<number, CellData>;
 
@@ -52,8 +63,7 @@ export interface Analysis {
   stikerNum: number | null;
   hasGR: boolean;
   levelCounts: Record<string, number>;
-  hasBudgetColumn: boolean;
-  budgetDict: Map<string, Raw>; // словарь КЕР → ИД.Бюджетная.Статья.1С
+  hasBudgetColumn: boolean; // наличие колонки "ИД.Бюджетная.Статья.1С"
 }
 
 export interface PreviewCell {
@@ -107,6 +117,7 @@ export function num(v: Raw): number {
 }
 
 function toNumericOrNull(v: Raw): number | null {
+  // аналог VBA IsNumeric для отчёта
   if (typeof v === "number") return isFinite(v) ? v : null;
   if (typeof v === "string" && v.trim() !== "") {
     const n = Number(v.trim().replace(/\s|\u00a0/g, "").replace(",", "."));
@@ -157,6 +168,7 @@ function themeToHex(idx: number, tint?: number): string {
   return c.map((x) => Math.round(x + (target - x) * t).toString(16).padStart(2, "0")).join("").toUpperCase();
 }
 
+/* «A1» → {row, col}. Свой парсер, чтобы не зависеть от экспорта Address в ExcelJS. */
 function a1ToRC(a: string): { row: number; col: number } | null {
   const m = /^\$?([A-Za-z]+)\$?(\d+)$/.exec(a.trim());
   if (!m) return null;
@@ -190,22 +202,6 @@ function baseNameOf(fileName: string): string {
   return i > 0 ? fileName.slice(0, i) : fileName;
 }
 
-/* Поиск колонки по заголовку (как в макросе GetColumnIndex) */
-function getColumnIndex(ws: ExcelJS.Worksheet, headerName: string, exactMatch: boolean = false): number {
-  for (let col = 1; col <= 256; col++) {
-    const cellValue = effectiveValue(ws.getCell(1, col).value);
-    if (typeof cellValue === "string" && cellValue.trim() !== "") {
-      const value = cellValue.trim();
-      if (exactMatch) {
-        if (value.toLowerCase() === headerName.toLowerCase()) return col;
-      } else {
-        if (value.toLowerCase().includes(headerName.toLowerCase())) return col;
-      }
-    }
-  }
-  return 0;
-}
-
 /* ---------- 1. анализ донора ---------- */
 export function analyzeDonor(wb: ExcelJS.Workbook, fileName: string): Analysis {
   const sheetNames = wb.worksheets.map((w) => w.name);
@@ -223,7 +219,7 @@ export function analyzeDonor(wb: ExcelJS.Workbook, fileName: string): Analysis {
   const lastRowK = lastNonEmptyRowOf(ws, 11);
   const lastRowA = lastNonEmptyRowOf(ws, 1);
 
-  const stikerRaw = effectiveValue(ws.getCell(2, 10).value);
+  const stikerRaw = effectiveValue(ws.getCell(2, 10).value); // J2
 
   let hasGR = false;
   const levelCounts: Record<string, number> = {};
@@ -235,39 +231,8 @@ export function analyzeDonor(wb: ExcelJS.Workbook, fileName: string): Analysis {
     }
   }
 
-  // Поиск колонок по заголовкам (как в макросе)
-  const srcColKER = getColumnIndex(ws, "КЕР.в.СР");
-  const srcColID = getColumnIndex(ws, "ИД.Бюджетная.Статья.1С");
-
-  console.log("[СВОД→1С] Найдены колонки в доноре: КЕР.в.СР =", srcColKER, ", ИД.Бюджетная.Статья.1С =", srcColID);
-
-  // Создание словаря соответствий (как в макросе)
-  const budgetDict = new Map<string, Raw>();
-  let hasBudgetColumn = false;
-
-  if (srcColKER > 0 && srcColID > 0) {
-    hasBudgetColumn = true;
-    const lastRowDonor = Math.max(
-      lastNonEmptyRowOf(ws, srcColKER),
-      lastNonEmptyRowOf(ws, srcColID)
-    );
-
-    if (lastRowDonor >= 2) {
-      for (let r = 2; r <= lastRowDonor; r++) {
-        const kerValue = effectiveValue(ws.getCell(r, srcColKER).value);
-        const idValue = effectiveValue(ws.getCell(r, srcColID).value);
-
-        if (typeof kerValue === "string" && kerValue.trim() !== "") {
-          const key = kerValue.trim();
-          if (!budgetDict.has(key)) {
-            budgetDict.set(key, idValue);
-          }
-        }
-      }
-    }
-
-    console.log("[СВОД→1С] Создан словарь с", budgetDict.size, "записями");
-  }
+  // Проверка наличия новой колонки "ИД.Бюджетная.Статья.1С" (колонка S, номер 19)
+  const hasBudgetColumn = checkBudgetColumn(ws);
 
   return {
     fileName,
@@ -276,11 +241,11 @@ export function analyzeDonor(wb: ExcelJS.Workbook, fileName: string): Analysis {
     sheetNames,
     dataRows: Math.max(lastRowA - 1, 0),
     stikerRaw,
+    // как в макросе: пустой J2 считается нулём
     stikerNum: stikerRaw == null || stikerRaw === "" ? 0 : toNumericOrNull(stikerRaw),
     hasGR,
     levelCounts,
     hasBudgetColumn,
-    budgetDict,
   };
 }
 
@@ -291,6 +256,17 @@ function lastNonEmptyRowOf(ws: ExcelJS.Worksheet, col: number): number {
     if (!isEmptyV(effectiveValue(ws.getCell(r, col).value))) last = r;
   }
   return last;
+}
+
+/* Проверка наличия колонки "ИД.Бюджетная.Статья.1С" в колонке S (19) */
+function checkBudgetColumn(ws: ExcelJS.Worksheet): boolean {
+  // Проверяем заголовок в строке 1, колонка S (19)
+  const header = effectiveValue(ws.getCell(1, 19).value);
+  if (typeof header === "string") {
+    const h = header.trim().toLowerCase();
+    return h.includes("ид") && h.includes("бюджетн") && h.includes("статья");
+  }
+  return false;
 }
 
 /* ---------- доступ к сетке ---------- */
@@ -346,7 +322,7 @@ const HIERARCHY: { code: string; resets: string[] }[] = [
   { code: "ГР", resets: ["КЕР", "ТМЦ"] },
 ];
 
-function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElemets: number } {
+function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean): { inserted: number; nElemets: number } {
   const cnt: Record<string, number> = {
     О: 0, К: 0, С: 0, У: 0, Э: 0, Л1: 0, Л2: 0, Л3: 0, Л4: 0, ГР: 0, КЕР: 0, ТМЦ: 0,
   };
@@ -358,13 +334,14 @@ function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElem
   for (let rr = 2; rr <= lastRowA0; rr++) {
     if (val(grid, rr, 11) === "КЕР") y++;
   }
-  const nElemets = lastRowA0 + y + 1;
+  const nElemets = lastRowA0 + y + 1; // как в макросе: nElemets = nElemets + y + 1
 
   for (let i = 1; i <= nElemets; i++) {
-    const g = i;
+    const g = i; // индекс сетки для строки Excel i+1
     while (grid.length <= g) grid.push(new Map());
     const row = grid[g];
 
+    // Cells(i+1, 7) = Cells(i+1, 1) — исходный код уходит в колонку G
     setV(row, 7, cell(row, 1)?.v ?? null);
 
     const code = cell(row, 11)?.v;
@@ -383,29 +360,47 @@ function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElem
       if (codeS === "ГР") fillRowTheme(row, FILL_GR);
     } else if (codeS === "КЕР") {
       cnt["ТМЦ"] = 0;
+      // Rows(i+1).Insert — новая строка выше исходной строки КЕР
       grid.splice(g, 0, new Map());
-      inserts.push(g + 1);
+      inserts.push(g + 1); // номер новой строки в терминах Excel
       inserted++;
       const top = grid[g];
       const src = grid[g + 1];
-      setV(top, 2, cell(src, 2)?.v ?? null);
-      setV(top, 3, cell(src, 3)?.v ?? null);
+      setV(top, 2, cell(src, 2)?.v ?? null); // B
+      setV(top, 3, cell(src, 3)?.v ?? null); // C
       cnt["КЕР"] += 1;
       r[10] = cnt["КЕР"] + ".";
       setV(top, 1, r.slice(0, 11).join(""));
       fillRow(top, FILL_GOLD);
-      i++;
+      i++; // следующая итерация цикла обработает исходную строку
       while (grid.length <= g + 1) grid.push(new Map());
       cnt["ТМЦ"] += 1;
       setV(src, 1, r.slice(0, 11).join("") + cnt["ТМЦ"]);
-      setV(src, 6, "");
+      setV(src, 6, ""); // Cells(i+1, 6) = ""
       fillRow(src, FILL_YELLOW);
     } else if (codeS === "ТМЦ") {
       cnt["ТМЦ"] += 1;
       setV(row, 1, r.slice(0, 11).join("") + cnt["ТМЦ"]);
-      setV(row, 4, cell(row, 5)?.v ?? "");
-      setV(row, 5, "");
+      setV(row, 4, cell(row, 5)?.v ?? ""); // D = E
+      setV(row, 5, ""); // E = ""
       fillRow(row, FILL_YELLOW);
+
+      // Дублирование значения из вышестоящей строки КЕР для колонки "ИД.Бюджетная.Статья.1С"
+      if (hasBudgetColumn) {
+        // Найти предыдущую строку КЕР
+        for (let j = g - 1; j >= 1; j--) {
+          const prevRow = grid[j - 1];
+          const prevCode = cell(prevRow, 11)?.v;
+          if (prevCode === "КЕР") {
+            // Скопировать значение из колонки 19 (исходная колонка S)
+            const budgetValue = cell(prevRow, 19)?.v;
+            if (budgetValue != null && budgetValue !== "") {
+              setV(row, 19, budgetValue);
+            }
+            break;
+          }
+        }
+      }
     }
   }
   return { inserted, nElemets } as any;
@@ -432,7 +427,7 @@ function deleteColumns(grid: Row[], widths: any[], merges: MergeRect[], inserts:
   const newWidths: any[] = [];
   widths.forEach((w, i) => {
     const c = i + 1;
-    if (!DELETED.has(c)) newWidths[mapCol(c) - 1] = w;
+    if (!DELETED.has(c)) newWidths[mapCol(c) - 1] = w; // 0-основанный индекс, как читает buildWorkbook
   });
   widths.length = 0;
   widths.push(...newWidths);
@@ -482,15 +477,17 @@ function runFormulas(grid: Row[], nElement: number) {
 }
 
 /* ---------- 5. Формат_1С ---------- */
-function runFormat(grid: Row[], nElemets: number) {
+function runFormat(grid: Row[], nElemets: number, hasBudgetColumn: boolean) {
   for (let r = 1; r <= nElemets; r++) {
     while (grid.length < r) grid.push(new Map());
     const row = grid[r - 1];
     const g7 = row.get(7) ?? row.set(7, { v: null }).get(7)!;
     g7.fill = FILL_RED;
     g7.fillT = undefined;
-    if (!g7.numFmt) g7.numFmt = "@";
-    for (const c of [8, 9]) {
+    if (!g7.numFmt) g7.numFmt = "@"; // Columns(7).NumberFormat = "@"
+    // Колонки 8-9 (и 10 если есть новая колонка) — зелёная заливка и серая граница
+    const greenCols = hasBudgetColumn ? [8, 9, 10] : [8, 9];
+    for (const c of greenCols) {
       const cd = row.get(c) ?? row.set(c, { v: null }).get(c)!;
       cd.fill = FILL_GREEN;
       cd.fillT = undefined;
@@ -534,59 +531,7 @@ function runGrouping(grid: Row[], nElement: number) {
   return { levels, groups };
 }
 
-/* ---------- 7. Вставка и заполнение колонки ИД.Бюджетная.Статья.1С ---------- */
-function insertBudgetColumn(grid: Row[], budgetDict: Map<string, Raw>) {
-  console.log("[СВОД→1С] Вставка колонки ИД.Бюджетная.Статья.1С, словарь:", budgetDict.size, "записей");
-
-  // Вставляем новую колонку 8 (после колонки 7 с кодами КЕР)
-  // Сдвигаем все существующие колонки >= 8 вправо
-  for (const row of grid) {
-    const entries = [...row.entries()].sort((a, b) => b[0] - a[0]); // сортируем по убыванию
-    for (const [c, cd] of entries) {
-      if (c >= 8) {
-        row.delete(c);
-        row.set(c + 1, cd);
-      }
-    }
-  }
-
-  // Устанавливаем заголовок в строке 1
-  if (grid.length > 0) {
-    setV(grid[0], 8, "ИД.Бюджетная.Статья.1С");
-  }
-
-  // Заполняем колонку по словарю (ВПР) и дублируем КЕР → ТМЦ
-  let kerValue: Raw = null;
-  for (let r = 1; r < grid.length; r++) {
-    const row = grid[r];
-    const codeTA = val(grid, r + 1, 11); // колонка K (ТА)
-    const codeKER = val(grid, r + 1, 7); // колонка G (коды КЕР)
-
-    if (codeTA === "КЕР") {
-      // Ищем значение по словарю
-      const kerCode = typeof codeKER === "string" ? codeKER.trim() : "";
-      if (kerCode && budgetDict.has(kerCode)) {
-        const dictValue = budgetDict.get(kerCode);
-        kerValue = dictValue !== undefined ? dictValue : null;
-        setV(row, 8, kerValue);
-        console.log(`[СВОД→1С] Строка ${r + 1} КЕР: код="${kerCode}", значение=${kerValue}`);
-      } else {
-        kerValue = null;
-      }
-    } else if (codeTA === "ТМЦ") {
-      // Дублируем значение из предыдущей строки КЕР
-      if (kerValue != null && kerValue !== "") {
-        setV(row, 8, kerValue);
-        console.log(`[СВОД→1С] Строка ${r + 1} ТМЦ: дублировано значение=${kerValue}`);
-      }
-    } else {
-      // Для других типов строк сбрасываем значение
-      kerValue = null;
-    }
-  }
-}
-
-/* ---------- 8. сборка выходной книги ---------- */
+/* ---------- 7. сборка выходной книги ---------- */
 const GRAY_BORDER = { style: "thin", color: BORDER_GRAY } as any;
 
 function writeCell(target: ExcelJS.Cell, cd: CellData) {
@@ -598,7 +543,9 @@ function writeCell(target: ExcelJS.Cell, cd: CellData) {
   if (cd.style) {
     try {
       target.style = JSON.parse(JSON.stringify(cd.style));
-    } catch {}
+    } catch {
+      /* стиль не критичен */
+    }
   }
   if (cd.fillT) {
     target.fill = { type: "pattern", pattern: "solid", fgColor: { ...cd.fillT } } as any;
@@ -618,28 +565,30 @@ function buildWorkbook(
   heights: (number | undefined)[],
   widths: any[],
   merges: MergeRect[],
-  levels: number[],
-  hasBudgetColumn: boolean
+  levels: number[]
 ): ExcelJS.Workbook {
   const wb = new E.Workbook();
   wb.creator = "СВОД → 1С (браузерный конвертер)";
   (wb as any).calcProperties = { fullCalcOnLoad: true };
   const ws = wb.addWorksheet("Свод");
   (ws.properties as any).outlineProperties = { summaryBelow: false, summaryRight: false };
-  ws.getColumn(7).numFmt = "@";
+  ws.getColumn(7).numFmt = "@"; // Columns(7).NumberFormat = "@"
 
   widths.forEach((w, i) => {
     if (!w) return;
     const col = ws.getColumn(i + 1);
     if (typeof w.w === "number") col.width = w.w;
+    // Не переносим флаг hidden из донора — все колонки видимы
   });
 
+  /* Ширины колонок файла 1С (условные единицы Excel), по спецификации.
+     1=ИД 1С, 2=Структура/Статья (широкая), 3–10 — узкие; 11–12 не заданы → как у донора/по умолчанию. */
   const COL_WIDTHS: [number, number][] = [
-    [1, 11], [2, 50], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [8, 20], [9, 11], [10, 11],
+    [1, 11], [2, 50], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11], [10, 20],
   ];
   for (const [c, w] of COL_WIDTHS) ws.getColumn(c).width = w;
 
-  // Снимаем скрытие для всех колонок
+  // Явно снимаем скрытие для всех колонок (как команда "Показать")
   for (let c = 1; c <= 12; c++) {
     ws.getColumn(c).hidden = false;
   }
@@ -659,7 +608,9 @@ function buildWorkbook(
     if (m.r1 < 1 || m.c1 < 1) continue;
     try {
       ws.mergeCells(m.r1, m.c1, m.r2, m.c2);
-    } catch {}
+    } catch {
+      /* конфликт объединений — пропускаем, как On Error Resume Next */
+    }
   }
   return wb;
 }
@@ -696,10 +647,12 @@ function buildPreview(grid: Row[], levels: number[], upto: number): PreviewRow[]
   return rows;
 }
 
+/* превью не должно блокировать результат: любая ошибка → пустая таблица и запись в консоль */
 function safePreview(grid: Row[], levels: number[], upto: number): PreviewRow[] {
   try {
     return buildPreview(grid, levels, upto);
   } catch (e) {
+    // eslint-disable-next-line no-console
     console.error("СВОД→1С: не удалось построить превью листа", e);
     return [];
   }
@@ -712,6 +665,8 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   const R = Math.max(ws.rowCount, 1);
   const C = Math.max(ws.columnCount, 12);
 
+  // материализуем лист: значения (формулы donor-файла разрешаются в значения —
+  // после удаления колонок ссылки всё равно были бы пересчитаны Excel в те же числа)
   const grid: Row[] = [];
   const heights: (number | undefined)[] = [];
   for (let r = 1; r <= R; r++) {
@@ -736,7 +691,8 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   const merges: MergeRect[] = [];
   const rawMerges: any[] = ((ws.model as any)?.merges as any[]) ?? [];
   for (const s of rawMerges) {
-    const str = typeof s === "string" ? s : typeof s?.range === "string" ? s.range : null;
+    const str =
+      typeof s === "string" ? s : typeof s?.range === "string" ? s.range : null;
     if (!str) continue;
     const parts = str.split(":");
     if (parts.length !== 2) continue;
@@ -745,6 +701,7 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
     if (p1 && p2) merges.push({ r1: p1.row, c1: p1.col, r2: p2.row, c2: p2.col });
   }
 
+  // заголовки (макрос пишет их в строку 1, сохраняя оформление донора)
   const headers = [
     "ИД 1С",
     "Структура/Статья ССР",
@@ -757,31 +714,34 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   if (grid.length === 0) grid.push(new Map());
   headers.forEach((h, i) => setV(grid[0], i + 1, h));
 
+  // Если есть новая колонка "ИД.Бюджетная.Статья.1С", добавляем её заголовок
+  // Устанавливаем в колонку 19 (S), которая после удаления станет колонкой 10
+  if (a.hasBudgetColumn) {
+    setV(grid[0], 19, "ИД.Бюджетная.Статья.1С");
+  }
+
+  // Нумерация_1С (возвращает число вставленных строк и границу nElemets)
   const lastRowA0 = lastNonEmpty(grid, 1);
   let y = 0;
   for (let rr = 2; rr <= lastRowA0; rr++) if (val(grid, rr, 11) === "КЕР") y++;
   const inserts: number[] = [];
-  const numInfo = runNumbering(grid, inserts);
-  const nElemets = numInfo.nElemets;
+  const numInfo = runNumbering(grid, inserts, a.hasBudgetColumn);
+  const nElemets = numInfo.nElemets; // = lastRowA0 + y + 1, как в макросе
 
   deleteColumns(grid, widths, merges, inserts);
 
-  // Вставка колонки ИД.Бюджетная.Статья.1С после обработки
-  if (a.hasBudgetColumn && a.budgetDict.size > 0) {
-    insertBudgetColumn(grid, a.budgetDict);
-  }
-
   const nElement = lastNonEmpty(grid, 1);
   const sums = runFormulas(grid, nElement);
-  runFormat(grid, nElemets);
+  runFormat(grid, nElemets, a.hasBudgetColumn);
   const grp = runGrouping(grid, nElement);
 
+  // фильтруем объединения по удалённым колонкам
   const okMerges = merges
     .filter((m) => !DELETED.has(m.c1) && !DELETED.has(m.c2))
     .map((m) => ({ r1: m.r1, c1: mapCol(m.c1), r2: m.r2, c2: mapCol(m.c2) }))
     .filter((m) => m.c1 <= m.c2 && m.r1 <= m.r2);
 
-  const outWorkbook = buildWorkbook(E, grid, heights, widths, okMerges, grp.levels, a.hasBudgetColumn);
+  const outWorkbook = buildWorkbook(E, grid, heights, widths, okMerges, grp.levels);
 
   const totalNum = sums.grand;
   const diff = a.stikerNum != null ? round2(a.stikerNum - totalNum) : null;
