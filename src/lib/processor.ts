@@ -262,10 +262,14 @@ function lastNonEmptyRowOf(ws: ExcelJS.Worksheet, col: number): number {
 function checkBudgetColumn(ws: ExcelJS.Worksheet): boolean {
   // Проверяем заголовок в строке 1, колонка S (19)
   const header = effectiveValue(ws.getCell(1, 19).value);
+  console.log("[СВОД→1С] Проверка колонки 19 (S):", header);
   if (typeof header === "string") {
     const h = header.trim().toLowerCase();
-    return h.includes("ид") && h.includes("бюджетн") && h.includes("статья");
+    const hasBudget = h.includes("ид") && h.includes("бюджетн") && h.includes("статья");
+    console.log("[СВОД→1С] Заголовок:", h, "→ hasBudgetColumn:", hasBudget);
+    return hasBudget;
   }
+  console.log("[СВОД→1С] Заголовок не является строкой, hasBudgetColumn: false");
   return false;
 }
 
@@ -387,15 +391,19 @@ function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean):
 
       // Дублирование значения из вышестоящей строки КЕР для колонки "ИД.Бюджетная.Статья.1С"
       if (hasBudgetColumn) {
+        console.log(`[СВОД→1С] Обработка строки ТМЦ (g=${g}), ищем предыдущую строку КЕР`);
         // Найти предыдущую строку КЕР
         for (let j = g - 1; j >= 1; j--) {
           const prevRow = grid[j - 1];
           const prevCode = cell(prevRow, 11)?.v;
+          console.log(`[СВОД→1С] Проверка строки ${j}: код=${prevCode}`);
           if (prevCode === "КЕР") {
             // Скопировать значение из колонки 19 (исходная колонка S)
             const budgetValue = cell(prevRow, 19)?.v;
+            console.log(`[СВОД→1С] Найдена строка КЕР в ${j}, значение колонки 19:`, budgetValue);
             if (budgetValue != null && budgetValue !== "") {
               setV(row, 19, budgetValue);
+              console.log(`[СВОД→1С] Значение скопировано в строку ТМЦ (g=${g})`);
             }
             break;
           }
@@ -680,6 +688,16 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
       });
     });
     grid.push(row);
+  }
+
+  // Отладка: проверяем, есть ли данные в колонке 19
+  if (a.hasBudgetColumn) {
+    console.log("[СВОД→1С] hasBudgetColumn=true, проверяем данные в колонке 19:");
+    for (let r = 1; r <= Math.min(R, 10); r++) {
+      const val19 = val(grid, r, 19);
+      const code11 = val(grid, r, 11);
+      console.log(`  Строка ${r}: код=${code11}, колонка19=${val19}`);
+    }
   }
 
   const widths: any[] = [];
