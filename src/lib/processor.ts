@@ -29,8 +29,8 @@ export const BORDER_GRAY = { theme: 1, tint: -0.349986266670736 };
 
 /* исходные колонки, удаляемые в конце Нумерация_1С:
    трижды Columns(8).Delete → H,I,J; затем 6 раз Columns(10).Delete → M,N,O,P,Q,R
-   Колонка S (ИД.Бюджетная.Статья.1С) НЕ удаляется, остаётся видимой */
-const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18]);
+   Новая колонка "ИД.Бюджетная.Статья.1С" (если есть) находится в колонке S (19) и тоже удаляется */
+const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18, 19]);
 
 /* ---------- типы ---------- */
 interface CellData {
@@ -322,7 +322,7 @@ const HIERARCHY: { code: string; resets: string[] }[] = [
   { code: "ГР", resets: ["КЕР", "ТМЦ"] },
 ];
 
-function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean): { inserted: number; nElemets: number } {
+function runNumbering(grid: Row[], inserts: number[]): { inserted: number; nElemets: number } {
   const cnt: Record<string, number> = {
     О: 0, К: 0, С: 0, У: 0, Э: 0, Л1: 0, Л2: 0, Л3: 0, Л4: 0, ГР: 0, КЕР: 0, ТМЦ: 0,
   };
@@ -384,23 +384,6 @@ function runNumbering(grid: Row[], inserts: number[], hasBudgetColumn: boolean):
       setV(row, 4, cell(row, 5)?.v ?? ""); // D = E
       setV(row, 5, ""); // E = ""
       fillRow(row, FILL_YELLOW);
-
-      // Дублирование значения из вышестоящей строки КЕР для колонки "ИД.Бюджетная.Статья.1С"
-      if (hasBudgetColumn) {
-        // Найти предыдущую строку КЕР
-        for (let j = g - 1; j >= 1; j--) {
-          const prevRow = grid[j - 1];
-          const prevCode = cell(prevRow, 11)?.v;
-          if (prevCode === "КЕР") {
-            // Скопировать значение из колонки 19 (исходная колонка S)
-            const budgetValue = cell(prevRow, 19)?.v;
-            if (budgetValue != null && budgetValue !== "") {
-              setV(row, 19, budgetValue);
-            }
-            break;
-          }
-        }
-      }
     }
   }
   return { inserted, nElemets } as any;
@@ -588,10 +571,6 @@ function buildWorkbook(
   ];
   for (const [c, w] of COL_WIDTHS) ws.getColumn(c).width = w;
 
-  // Снимаем скрытие для колонок ТА (8) и ИД.Бюджетная.Статья.1С (10)
-  ws.getColumn(8).hidden = false;
-  ws.getColumn(10).hidden = false;
-
   grid.forEach((row, gi) => {
     const r = gi + 1;
     const lvl = levels[r] ?? 0;
@@ -714,9 +693,8 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   headers.forEach((h, i) => setV(grid[0], i + 1, h));
 
   // Если есть новая колонка "ИД.Бюджетная.Статья.1С", добавляем её заголовок
-  // Устанавливаем в колонку 19 (S), которая после удаления станет колонкой 10
   if (a.hasBudgetColumn) {
-    setV(grid[0], 19, "ИД.Бюджетная.Статья.1С");
+    setV(grid[0], 10, "ИД.Бюджетная.Статья.1С");
   }
 
   // Нумерация_1С (возвращает число вставленных строк и границу nElemets)
@@ -724,7 +702,7 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
   let y = 0;
   for (let rr = 2; rr <= lastRowA0; rr++) if (val(grid, rr, 11) === "КЕР") y++;
   const inserts: number[] = [];
-  const numInfo = runNumbering(grid, inserts, a.hasBudgetColumn);
+  const numInfo = runNumbering(grid, inserts);
   const nElemets = numInfo.nElemets; // = lastRowA0 + y + 1, как в макросе
 
   deleteColumns(grid, widths, merges, inserts);
