@@ -652,54 +652,70 @@ function safePreview(grid: Row[], levels: number[], upto: number): PreviewRow[] 
 }
 
 /* ---------- 8. ФИНАЛЬНАЯ обработка колонки [ИД.Бюджетная.Статья.1С] ---------- */
-/**
- * Выполняется ПОСЛЕ всех действий над сеткой (нумерация, удаление колонок,
- * формулы, формат, группировка). Находит колонку [ИД.Бюджетная.Статья.1С]
- * по заголовку в строке 1 и:
- *   - протягивает значения из строк КЕР на строки ТМЦ до следующего КЕР
- *     (аналог Power Query «Дублировать вниз»);
- *   - очищает ячейки в этой колонке на всех прочих строках
- *     (не КЕР и не ТМЦ).
- * Возвращает номер найденной колонки или null, если колонки нет.
- */
-function propagateBudgetColumn(grid: Row[], upToRow: number): number | null {
-  // 1) Ищем колонку по заголовку в строке 1.
+
+/* Нормализация заголовка: убираем пробелы, точки, дефисы, нижние подчёркивания. */
+const normalizeHeader = (s: string) => s.toLowerCase().replace(/[\s._\-]/g, "");
+
+/** Находит колонку, в которой больше всего значений-кодов уровней (КЕР/ТМЦ/ГР). */
+function findCodeColumn(grid: Row[], upToRow: number): number | null {
+  const seen: Record<number, number> = {};
+  const limit = Math.min(upToRow, grid.length);
+  for (let r = 2; r <= limit; r++) {
+    const row = grid[r - 1];
+    if (!row) continue;
+    row.forEach((cd, c) => {
+      const v = cd?.v;
+      if (v === "КЕР" || v === "ТМЦ" || v === "ГР") {
+        seen[c] = (seen[c] ?? 0) + 1;
+      }
+    });
+  }
+  let best: number | null = null;
+  let bestScore = -1;
+  for (const [cStr, score] of Object.entries(seen)) {
+    const c = Number(cStr);
+    if (score > bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/** Находит колонку [ИД.Бюджетная.Статья.1С] по заголовку в строке 1. */
+function findBudgetColumn(grid: Row[]): number | null {
   const headerRow = grid[0];
   if (!headerRow) return null;
-
   let budgetCol: number | null = null;
   headerRow.forEach((cd, c) => {
     if (budgetCol != null) return;
     const v = cd?.v;
-    if (typeof v === "string") {
-      const h = v.trim().toLowerCase();
-      if (h.includes("ид") && h.includes("бюджетн") && h.includes("статья")) {
-        budgetCol = c;
-      }
-    }
+    if (typeof v !== "string") return;
+    const h = normalizeHeader(v);
+    if (h.includes("ид") && h.includes("бюджетнаястатья")) budgetCol = c;
   });
+  return budgetCol;
+}
+
+/**
+ * Выполняется ПОСЛЕ всех действий над сеткой. Находит колонку
+ * [ИД.Бюджетная.Статья.1С] по заголовку и колонку с кодами (КЕР/ТМЦ/ГР),
+ * затем:
+ *   - на строке КЕР запоминает текущее значение;
+ *   - на строках КЕР и ТМЦ проставляет это значение;
+ *   - на остальных строках — очищает.
+ * Возвращает номер найденной колонки или null.
+ */
+function propagateBudgetColumn(grid: Row[], upToRow: number): number | null {
+  const budgetCol = findBudgetColumn(grid);
   if (budgetCol == null) return null;
 
-  // 2) Находим строки с кодом уровня (для этого определим, в какой колонке
-  //    он находится после всех преобразований — по значению «КЕР»/«ТМЦ»).
-  //    Идём по всем колонкам строки 2 и ищем ту, где встречаются эти коды.
-  let codeCol: number | null = null;
-  for (let probeRow = 2; probeRow <= upToRow && codeCol == null; probeRow++) {
-    const row = grid[probeRow - 1];
-    if (!row) continue;
-    row.forEach((cd, c) => {
-      if (codeCol != null) return;
-      const v = cd?.v;
-      if (v === "КЕР" || v === "ТМЦ" || v === "ГР") codeCol = c;
-    });
-  }
-  // Если по каким-то причинам не нашли — используем колонку 8 (стандарт после удаления).
-  if (codeCol == null) codeCol = 8;
+  const codeCol = findCodeColumn(grid, upToRow);
+  if (codeCol == null) return null;
 
-  // 3) Сверху вниз: запоминаем значение на КЕР, проставляем на КЕР и ТМЦ,
-  //    на остальных — очищаем.
   let lastBudget: Raw = null;
-  for (let r = 2; r <= upToRow; r++) {
+  const limit = Math.min(upToRow, grid.length);
+  for (let r = 2; r <= limit; r++) {
     const row = grid[r - 1];
     if (!row) continue;
 
@@ -714,11 +730,10 @@ function propagateBudgetColumn(grid: Row[], upToRow: number): number | null {
     if (codeS === "КЕР" || codeS === "ТМЦ") {
       if (!isEmptyV(lastBudget)) {
         setV(row, budgetCol, lastBudget);
-      } else {
+      } else if (row.has(budgetCol)) {
         setV(row, budgetCol, null);
       }
     } else {
-      // Не КЕР и не ТМЦ — очищаем.
       if (row.has(budgetCol)) {
         setV(row, budgetCol, null);
       }
@@ -807,10 +822,12 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
 
   /* === ФИНАЛЬНЫЙ ШАГ: работа с колонкой [ИД.Бюджетная.Статья.1С] ===
      Делается ПОСЛЕ всех действий (нумерация, удаление колонок, формулы,
-     формат, группировка). Находим колонку по заголовку и протягиваем
-     значения со строк КЕР на строки ТМЦ; лишние ячейки очищаем. */
+     формат, группировка). Границей берём фактическое число строк данных
+     nElement (а не nElemets), чтобы захватить все строки ТМЦ, включая
+     последние. Находим колонку по заголовку и протягиваем значения
+     со строк КЕР на строки ТМЦ; лишние ячейки очищаем. */
   if (a.hasBudgetColumn) {
-    propagateBudgetColumn(grid, nElemets);
+    propagateBudgetColumn(grid, nElement);
   }
 
   // фильтруем объединения по удалённым колонкам
