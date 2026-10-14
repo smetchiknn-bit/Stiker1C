@@ -29,8 +29,8 @@ export const BORDER_GRAY = { theme: 1, tint: -0.349986266670736 };
 
 /* исходные колонки, удаляемые в конце Нумерация_1С:
    трижды Columns(8).Delete → H,I,J; затем 6 раз Columns(10).Delete → M,N,O,P,Q,R
-   Новая колонка "ИД.Бюджетная.Статья.1С" (если есть) находится в колонке S (19) и тоже удаляется */
-const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18, 19]);
+   Колонки K (ТА) и S (ИД.Бюджетная.Статья.1С) НЕ удаляются, остаются видимыми */
+const DELETED = new Set([8, 9, 10, 13, 14, 15, 16, 17, 18]);
 
 /* ---------- типы ---------- */
 interface CellData {
@@ -587,6 +587,10 @@ function buildWorkbook(
     [1, 11], [2, 50], [3, 11], [4, 11], [5, 11], [6, 11], [7, 11], [8, 11], [9, 11], [10, 11],
   ];
   for (const [c, w] of COL_WIDTHS) ws.getColumn(c).width = w;
+
+  // Снимаем скрытие для колонок ТА (8) и ИД.Бюджетная.Статья.1С (10)
+  ws.getColumn(8).hidden = false;
+  ws.getColumn(10).hidden = false;
 
   grid.forEach((row, gi) => {
     const r = gi + 1;
