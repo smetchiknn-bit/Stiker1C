@@ -16,9 +16,10 @@ import { getExcelJS } from "./excel";
  *  ДОП. (по требованию заказчика):
  *    A) Колонки [ТА] и [ИД.Бюджетная.Статья.1С] в реципиенте должны быть
  *       ВИДИМЫМИ (отменяем скрытие, которое было в доноре).
- *    B) Значения [ИД.Бюджетная.Статья.1С] со строк КЕР дублируются вниз
- *       на строки ТМЦ до следующего КЕР (аналог Power Query «Дублировать вниз»),
- *       а ячейки, не относящиеся ни к КЕР, ни к ТМЦ — очищаются.
+ *    B) После завершения ВСЕХ действий находим колонку [ИД.Бюджетная.Статья.1С]
+ *       в итоговой сетке и продлеваем значения из строк КЕР на строки ТМЦ
+ *       (аналог Power Query: «Дублировать вниз»). Ячейки, не относящиеся
+ *       ни к КЕР, ни к ТМЦ — очищаются.
  * ==========================================================================*/
 
 export type Raw = string | number | boolean | Date | null;
@@ -434,48 +435,6 @@ function deleteColumns(grid: Row[], widths: any[], merges: MergeRect[], inserts:
   }
 }
 
-/* ---------- 3a. Дублирование [ИД.Бюджетная.Статья.1С] (КЕР → ТМЦ) ---------- */
-/* Номера колонок ПОСЛЕ удаления служебных колонок. */
-const CODE_COL_AFTER = mapCol(CODE_SRC_COL);       // K (11)  → 8
-const BUDGET_COL_AFTER = mapCol(BUDGET_SRC_COL);   // S (19)  → 10
-
-/**
- * Протягиваем [ИД.Бюджетная.Статья.1С] вниз по строкам:
- *  - на строке «КЕР» запоминаем актуальное значение;
- *  - на строках «КЕР» и «ТМЦ» проставляем это значение;
- *  - на всех прочих строках (О, К, С, У, Э, Л1..Л4, ГР, заголовок, итоги) — очищаем.
- * Полный аналог Power Query: «Дублировать вниз» + «Очистить лишние ячейки».
- */
-function propagateBudget(grid: Row[], upToRow: number) {
-  let lastBudget: Raw = null;
-  for (let r = 2; r <= upToRow; r++) {   // строку 1 (заголовок) не трогаем
-    const row = grid[r - 1];
-    if (!row) continue;
-
-    const code = row.get(CODE_COL_AFTER)?.v;
-    const codeS = typeof code === "string" ? code : null;
-
-    if (codeS === "КЕР") {
-      const cur = row.get(BUDGET_COL_AFTER)?.v;
-      if (!isEmptyV(cur)) lastBudget = cur;
-    }
-
-    if (codeS === "КЕР" || codeS === "ТМЦ") {
-      if (!isEmptyV(lastBudget)) {
-        setV(row, BUDGET_COL_AFTER, lastBudget);
-      } else {
-        // Источника нет — на всякий случай очищаем.
-        setV(row, BUDGET_COL_AFTER, null);
-      }
-    } else {
-      // Не КЕР и не ТМЦ — очищаем.
-      if (row.has(BUDGET_COL_AFTER)) {
-        setV(row, BUDGET_COL_AFTER, null);
-      }
-    }
-  }
-}
-
 /* ---------- 4. Сквозные_формулы_1С ---------- */
 function setFormula(grid: Row[], r: number, c: number, f: string, fr: number) {
   while (grid.length < r) grid.push(new Map());
@@ -554,7 +513,7 @@ function runGrouping(grid: Row[], nElement: number) {
         const y0 = i;
         i++;
         while (i <= lastRow) {
-          const isGR = val(grid, i, CODE_COL_AFTER) === "ГР";
+          const isGR = val(grid, i, CODE_SRC_COL) === "ГР";
           if (dots[i] > level - 1 || isGR) i++;
           else break;
         }
@@ -692,6 +651,82 @@ function safePreview(grid: Row[], levels: number[], upto: number): PreviewRow[] 
   }
 }
 
+/* ---------- 8. ФИНАЛЬНАЯ обработка колонки [ИД.Бюджетная.Статья.1С] ---------- */
+/**
+ * Выполняется ПОСЛЕ всех действий над сеткой (нумерация, удаление колонок,
+ * формулы, формат, группировка). Находит колонку [ИД.Бюджетная.Статья.1С]
+ * по заголовку в строке 1 и:
+ *   - протягивает значения из строк КЕР на строки ТМЦ до следующего КЕР
+ *     (аналог Power Query «Дублировать вниз»);
+ *   - очищает ячейки в этой колонке на всех прочих строках
+ *     (не КЕР и не ТМЦ).
+ * Возвращает номер найденной колонки или null, если колонки нет.
+ */
+function propagateBudgetColumn(grid: Row[], upToRow: number): number | null {
+  // 1) Ищем колонку по заголовку в строке 1.
+  const headerRow = grid[0];
+  if (!headerRow) return null;
+
+  let budgetCol: number | null = null;
+  headerRow.forEach((cd, c) => {
+    if (budgetCol != null) return;
+    const v = cd?.v;
+    if (typeof v === "string") {
+      const h = v.trim().toLowerCase();
+      if (h.includes("ид") && h.includes("бюджетн") && h.includes("статья")) {
+        budgetCol = c;
+      }
+    }
+  });
+  if (budgetCol == null) return null;
+
+  // 2) Находим строки с кодом уровня (для этого определим, в какой колонке
+  //    он находится после всех преобразований — по значению «КЕР»/«ТМЦ»).
+  //    Идём по всем колонкам строки 2 и ищем ту, где встречаются эти коды.
+  let codeCol: number | null = null;
+  for (let probeRow = 2; probeRow <= upToRow && codeCol == null; probeRow++) {
+    const row = grid[probeRow - 1];
+    if (!row) continue;
+    row.forEach((cd, c) => {
+      if (codeCol != null) return;
+      const v = cd?.v;
+      if (v === "КЕР" || v === "ТМЦ" || v === "ГР") codeCol = c;
+    });
+  }
+  // Если по каким-то причинам не нашли — используем колонку 8 (стандарт после удаления).
+  if (codeCol == null) codeCol = 8;
+
+  // 3) Сверху вниз: запоминаем значение на КЕР, проставляем на КЕР и ТМЦ,
+  //    на остальных — очищаем.
+  let lastBudget: Raw = null;
+  for (let r = 2; r <= upToRow; r++) {
+    const row = grid[r - 1];
+    if (!row) continue;
+
+    const code = row.get(codeCol)?.v;
+    const codeS = typeof code === "string" ? code : null;
+
+    if (codeS === "КЕР") {
+      const cur = row.get(budgetCol)?.v;
+      if (!isEmptyV(cur)) lastBudget = cur;
+    }
+
+    if (codeS === "КЕР" || codeS === "ТМЦ") {
+      if (!isEmptyV(lastBudget)) {
+        setV(row, budgetCol, lastBudget);
+      } else {
+        setV(row, budgetCol, null);
+      }
+    } else {
+      // Не КЕР и не ТМЦ — очищаем.
+      if (row.has(budgetCol)) {
+        setV(row, budgetCol, null);
+      }
+    }
+  }
+  return budgetCol;
+}
+
 /* ---------- главный вход ---------- */
 export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promise<Outcome> {
   const E = await getExcelJS();
@@ -765,16 +800,18 @@ export async function processWorkbook(wb: ExcelJS.Workbook, a: Analysis): Promis
 
   const nElement = lastNonEmpty(grid, 1);
 
-  /* Дублируем [ИД.Бюджетная.Статья.1С] с КЕР на ТМЦ и чистим лишние ячейки
-     (Power Query: «Дублировать вниз» + «Очистить»). Делаем это ПОСЛЕ удаления
-     служебных колонок, когда бюджетная колонка уже стоит в позиции 10. */
-  if (a.hasBudgetColumn) {
-    propagateBudget(grid, nElemets);
-  }
-
+  // Формулы, формат и группировка — как в макросе.
   const sums = runFormulas(grid, nElement);
   runFormat(grid, nElemets, a.hasBudgetColumn);
   const grp = runGrouping(grid, nElement);
+
+  /* === ФИНАЛЬНЫЙ ШАГ: работа с колонкой [ИД.Бюджетная.Статья.1С] ===
+     Делается ПОСЛЕ всех действий (нумерация, удаление колонок, формулы,
+     формат, группировка). Находим колонку по заголовку и протягиваем
+     значения со строк КЕР на строки ТМЦ; лишние ячейки очищаем. */
+  if (a.hasBudgetColumn) {
+    propagateBudgetColumn(grid, nElemets);
+  }
 
   // фильтруем объединения по удалённым колонкам
   const okMerges = merges
